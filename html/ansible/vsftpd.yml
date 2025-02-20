@@ -1,0 +1,124 @@
+- hosts: localhost
+  connection: local
+  become: true
+  gather_facts: no
+
+  vars:
+    option: "2"
+    ftpUser1: ""
+    ftpPass1: ""
+    ftpUserRoot1: "/var/www/wp"
+    ftpUser2: ""
+    ftpPass2: ""
+    ftpUserRoot2: "/var/www/nc"
+
+  tasks:
+    - name: Instalar paquetes requeridos
+      apt:
+        pkg:
+          - vsftpd
+          - libpam-pwdfile
+          - apache2
+        update_cache: yes
+        state: present
+
+    - name: Instalar bcrypt-tool via snap
+      snap:
+        name: bcrypt-tool
+        state: present
+
+    - name: Crear configuración de vsftpd
+      template:
+        src: "vsftpd.conf.j2"
+        dest: "/etc/vsftpd.conf"
+
+    - name: Crear usuario vsftpd
+      user:
+        name: vsftpd
+        home: /home/vsftpd
+        group: nogroup
+        shell: /bin/false
+        create_home: yes
+        system: yes
+
+    - name: Configurar permisos de ftp root 1
+      file:
+        path: "{{ ftpUserRoot1 }}"
+        state: directory
+        owner: vsftpd
+        group: nogroup
+        mode: '0755'
+        recurse: yes
+      when: option in ["1", "2"] 
+
+    - name: Configurar permisos de ftp root 2
+      file:
+        path: "{{ ftpUserRoot2 }}"
+        state: directory
+        owner: vsftpd
+        group: nogroup
+        mode: '0775'
+        recurse: yes
+      when: option == "2" 
+
+
+    - name: Crear directorio de configuración de usuarios
+      file:
+        path: /etc/vsftpd/userconfig
+        state: directory
+        mode: '0755'
+
+    - name: Configurar usuario FTP 1
+      blockinfile:
+        path: /etc/vsftpd/userconfig/{{ ftpUser1 }}
+        create: yes
+        block: |
+          local_root=/var/www/wp
+      when: option in ["1", "2"] 
+
+    - name: Configurar usuario FTP 2
+      blockinfile:
+        path: /etc/vsftpd/userconfig/{{ ftpUser2 }}
+        create: yes
+        block: |
+          local_root=/var/www/nc
+      when: option == "2"
+
+    - name: Configurar PAM
+      copy:
+        dest: /etc/pam.d/vsftpd
+        content: |
+          auth required pam_pwdfile.so pwdfile /etc/vsftpd/ftpd.passwd
+          account required pam_permit.so
+
+    - name: Crear contraseña de usuario
+      shell: >
+        htpasswd -c -p -b /etc/vsftpd/ftpd.passwd {{ ftpUser1 }}
+        $(bcrypt-tool hash {{ ftpPass1 }})
+      # args:
+      #   warn: false  # Desactiva la advertencia de uso de comandos
+      when: option in ["1", "2"] 
+
+    - name: Crear contraseña de usuario
+      shell: >
+        htpasswd -d -p -b /etc/vsftpd/ftpd.passwd {{ ftpUser2 }}
+        $(bcrypt-tool hash {{ ftpPass2 }})
+      # args:
+      #   warn: false  # Desactiva la advertencia de uso de comandos
+      when: option == "2"
+
+
+    - name: Generar certificado SSL
+      command: >
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /etc/ssl/private/vsftpd.pem
+        -out /etc/ssl/private/vsftpd.pem
+        -subj "/CN=localhost"
+      args:
+        creates: /etc/ssl/private/vsftpd.pem
+
+    - name: Habilitar y reiniciar vsftpd
+      service:
+        name: vsftpd
+        enabled: yes
+        state: restarted

@@ -1,0 +1,93 @@
+---
+# Configuración de Apache
+- name: Create document root
+  file:
+    path: "/var/www/{{ ncDomain }}"
+    state: directory
+    owner: "www-data"
+    group: "www-data"
+    mode: '0755'
+  tags: [ apache ]
+
+- name: Set up Apache VirtualHost
+  template:
+    src: "../files/ncApache.conf.j2"
+    dest: "/etc/apache2/sites-available/{{ ncVirtualHostFile }}"
+  tags: [ apache ]
+
+- name: Enable new site
+  shell: /usr/sbin/a2ensite {{ ncVirtualHostFile }}
+  tags: [ apache ]
+
+- name: Restart Apache to apply changes
+  service:
+    name: apache2
+    state: restarted
+  tags: [ apache ]
+
+- name: Crear base de datos Nextcloud
+  mysql_db:
+    name: "{{ ncDBName }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysqlRootPassword }}"
+  tags: [ mysql ]
+
+- name: Crear usuario de la base de datos
+  mysql_user:
+    name: "{{ ncDBUser }}"
+    password: "{{ ncDBPassword }}"
+    priv: "{{ ncDBName }}.*:ALL"
+    state: present
+    login_user: root
+    login_password: "{{ mysqlRootPassword }}"
+  tags: [ mysql ]
+
+# Configuración de nextcloud
+
+- name: Descargar y extraer Nextcloud
+  get_url:
+    url: "https://download.nextcloud.com/server/releases/nextcloud-{{ nextcloud_version }}.zip"
+    dest: "/tmp/nextcloud.zip"
+
+- name: Extraer Nextcloud
+  unarchive:
+    src: "/tmp/nextcloud.zip"
+    dest: "/var/www/{{ ncDomain }}"
+    remote_src: yes
+    creates: "/var/www/{{ ncDomain }}/nextcloud"
+  tags: [ nextcloud ]
+
+- name: Definir variables de Nextcloud
+  set_fact:
+    db_name: "{{ ncDBName }}"
+    db_user: "{{ ncDBUser }}"
+    db_password: "{{ ncDBPassword }}"
+    nextcloud_version: "27.0.2"
+    web_root: "/var/www/{{ ncDomain }}/nextcloud"
+
+- name: Set ownership
+  file:
+    path: "/var/www/{{ ncDomain }}"
+    state: directory
+    recurse: yes
+    owner: www-data
+    group: www-data
+
+- name: Set permissions for directories
+  shell: '/usr/bin/find /var/www/{{ ncDomain }}/nextcloud/ -type d -exec chmod 750 {} \;'
+
+- name: Set permissions for files
+  shell: '/usr/bin/find /var/www/{{ ncDomain }}/nextcloud/ -type f -exec chmod 640 {} \;'
+
+- name: Set up nc-config
+  template:
+    src: "../files/ncConfig.php.j2"
+    dest: "/var/www/{{ ncDomain }}/nextcloud/nc-config.php"
+
+# Reiniciar MySQL para aplicar cambios
+- name: Restart MySQL to apply changes
+  service:
+    name: mariadb
+    state: restarted
+  tags: [ mysql ]
